@@ -53,7 +53,7 @@ input[type=range]{width:90px;accent-color:var(--v)}
 
 <section class="s on" id="home" style="justify-content:center">
 <div class="logo">Blindtest<small>RAP FR</small></div>
-<p class="msg">Devine le son. Extraits audio officiels (30 s) via iTunes.</p>
+<p class="msg">Devine le son. Extraits audio officiels (30 s) via Deezer.</p>
 <button class="btn big" id="goSetup">▶ JOUER</button>
 <div id="best" class="msg"></div>
 </section>
@@ -131,12 +131,15 @@ function listen(){if(!S.t)return;try{au.currentTime=S.st||0}catch(e){}const p=au
 $("#replay").onclick=()=>{S.replays=(S.replays||0)+1;listen()};
 
 // --- catalogue (iTunes Search API, sans clé)
-async function fetchArtist(a){try{const c=new AbortController(),to=setTimeout(()=>c.abort(),8000);
-const r=await fetch("https://itunes.apple.com/search?term="+encodeURIComponent(a)+"&country=fr&media=music&entity=song&limit=40",{signal:c.signal});clearTimeout(to);
-const j=await r.json(),key=norm(a.split(" ")[0]),seen=new Set(pool.map(t=>t.id)),out=[];
-(j.results||[]).forEach((x,i)=>{if(!x.previewUrl||!x.trackName||!norm(x.artistName).includes(key)||seen.has(x.trackId))return;const ti=clean(x.trackName);if(out.some(o=>norm(o.title)==norm(ti)))return;
-out.push({id:x.trackId,title:ti,artist:x.artistName.split(/ & |, /)[0]==a?a:x.artistName,year:+(x.releaseDate||"0").slice(0,4),prev:x.previewUrl,cover:(x.artworkUrl100||"").replace("100x100","400x400"),hard:i>=10})});
-pool.push(...out);return out.length}catch(e){return 0}}
+function jsonp(u,ms){return new Promise((res,rej)=>{const cb="cb"+Math.random().toString(36).slice(2),sc=document.createElement("script");const end=()=>{clearTimeout(to);delete window[cb];sc.remove()};const to=setTimeout(()=>{end();rej(new Error("timeout"))},ms);window[cb]=d=>{end();res(d)};sc.onerror=()=>{end();rej(new Error("script"))};sc.src=u+"&callback="+cb;document.head.append(sc)})}
+async function fetchArtist(a){
+ const key=norm(a.split(" ")[0]),seen=new Set(pool.map(t=>t.id)),out=[];
+ const add=t=>{if(!t.prev||!t.title||seen.has(t.id))return;const ti=clean(t.title);if(out.some(o=>norm(o.title)==norm(ti)))return;t.title=ti;t.hard=out.length>=10;out.push(t)};
+ try{const j=await jsonp("https://api.deezer.com/search?q="+encodeURIComponent('artist:"'+a+'"')+"&limit=40&output=jsonp",9000);
+  (j.data||[]).forEach(x=>{if(x.artist&&norm(x.artist.name).includes(key))add({id:"d"+x.id,did:x.id,title:x.title_short||x.title,artist:x.artist.name,year:0,prev:x.preview,cover:(x.album&&(x.album.cover_big||x.album.cover_medium))||""})})}catch(e){}
+ if(out.length<5)try{const j=await jsonp("https://itunes.apple.com/search?term="+encodeURIComponent(a)+"&country=fr&media=music&entity=song&limit=40",9000);
+  (j.results||[]).forEach(x=>{if(x.previewUrl&&x.trackName&&norm(x.artistName).includes(key))add({id:"i"+x.trackId,title:x.trackName,artist:x.artistName,year:+(x.releaseDate||"0").slice(0,4),prev:x.previewUrl,cover:(x.artworkUrl100||"").replace("100x100","400x400")})})}catch(e){}
+ pool.push(...out);return out.length}
 async function fill(n){if(loading)return;loading=true;const used=S.arts||(S.arts=new Set());const c=shuf(ART.filter(a=>!used.has(a))).slice(0,n);c.forEach(a=>used.add(a));await Promise.all(c.map(fetchArtist));loading=false}
 
 // --- game
@@ -147,7 +150,7 @@ async function startGame(){
  if(cfg.np==1)S.players[0].n="Toi";
  show("load");$("#retry").style.display="none";$("#loadmsg").textContent="Chargement des extraits…";
  await fill(9);
- if(pool.length<8){$("#loadmsg").innerHTML='<span class="err">Impossible de charger les extraits (réseau ou API iTunes bloquée).</span>';$("#retry").style.display="block";return}
+ if(pool.length<8){$("#loadmsg").innerHTML='<span class="err">Impossible de charger les extraits (réseau ou API Deezer/iTunes bloquée).</span>';$("#retry").style.display="block";return}
  if(cfg.mode=="chrono"){S.end=Date.now()+60000;S.iv=setInterval(()=>{const l=Math.max(0,Math.ceil((S.end-Date.now())/1000));$("#tm").textContent="⏱ "+l+" s";if(l<=0){clearInterval(S.iv);S.over=true;if(S.done||!S.t)finish();else{S.done=true;au.pause();finish()}}},250)}
  next();
 }
@@ -158,14 +161,16 @@ function next(){
  if(cfg.np>1){$("#passName").textContent=S.players[S.r%cfg.np].n;show("pass");$("#ready").onclick=()=>{show("play");S.r++;newQ(true)};}
  else{show("play");S.r++;newQ(true)}
 }
-function newQ(first){
+function newQ(first,force){
  clearInterval(S.cv);S.done=false;
  let c=pool.filter(t=>!played.has(t.id)&&!S.hist.includes(t.id)&&!t.bad&&(cfg.mode!="hard"||t.hard));
  if(!c.length)c=pool.filter(t=>!S.hist.includes(t.id)&&!t.bad);
  if(!c.length){S.hist=[];c=pool.filter(t=>!t.bad)}
  if(c.length<6||pool.filter(t=>!S.hist.includes(t.id)).length<8)fill(4);
  if(!c.length){$("#pmsg").textContent="Plus d'extraits disponibles.";return}
- const t=rnd(c),m=cfg.mode;S.t=t;S.hist.push(t.id);S.t0=Date.now();
+ const t=force||rnd(c),m=cfg.mode;
+ if(m=="year"&&!t.year){$("#pmsg").textContent="Chargement…";const fin=y=>{if(y)t.year=y;else t.bad=true;newQ(first,y?t:null)};jsonp("https://api.deezer.com/track/"+t.did+"?output=jsonp",7000).then(d=>fin(+((d&&d.release_date)||"0").slice(0,4))).catch(()=>fin(0));return}
+ S.t=t;S.hist.push(t.id);S.t0=Date.now();
  S.st=m=="suite"?14:0;S.lim=m=="hard"?6:m=="suite"?10:0;
  const pl=S.players[(S.r-1)%cfg.np];
  $("#who").textContent="🎮 "+pl.n;$("#prog").textContent="Manche "+S.r+"/"+totalR();$("#sc").textContent="⭐ "+pl.s;
